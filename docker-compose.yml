@@ -1,0 +1,228 @@
+# =============================================================================
+# Docker Compose - Ollama Manager
+# Production-ready multi-service configuration
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: ollama_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ollama}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ollama_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ollama_manager}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - ollama_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ollama} -d ${POSTGRES_DB:-ollama_manager}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis Cache
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: ollama_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - ollama_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # FastAPI Backend
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./OllamaManager
+      dockerfile: Dockerfile
+      target: production
+    container_name: ollama_backend
+    restart: unless-stopped
+    environment:
+      # Application
+      ENVIRONMENT: production
+      DEBUG: "false"
+      SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-in-production-minimum-32-chars}
+      
+      # Ollama Connection
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-300}
+      
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ollama}:${POSTGRES_PASSWORD:-ollama_secure_password}@postgres:5432/${POSTGRES_DB:-ollama_manager}
+      
+      # Redis Cache
+      REDIS_URL: redis://redis:6379/0
+      CACHE_ENABLED: "true"
+      CACHE_TTL: 300
+      
+      # Rate Limiting
+      RATE_LIMIT_REQUESTS: 100
+      RATE_LIMIT_PERIOD: 60
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_DIR: /app/logs
+      
+      # Backup
+      BACKUP_DIR: /app/backups
+      
+      # CORS
+      CORS_ORIGINS: '["*"]'
+      
+      # Workers
+      WORKERS: 4
+    volumes:
+      - backend_logs:/app/logs
+      - backend_backups:/app/backups
+    ports:
+      - "8000:8000"
+    networks:
+      - ollama_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/system/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ---------------------------------------------------------------------------
+  # React Frontend (Build Only)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: builder
+    container_name: ollama_frontend_build
+    volumes:
+      - frontend_dist:/app/dist
+    networks:
+      - ollama_network
+
+  # ---------------------------------------------------------------------------
+  # Nginx Reverse Proxy
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+      target: production
+    container_name: ollama_nginx
+    restart: unless-stopped
+    volumes:
+      - frontend_dist:/usr/share/nginx/html:ro
+      - nginx_logs:/var/log/nginx
+      - nginx_cache:/var/cache/nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - ollama_network
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Adminer (Database Management - Optional)
+  # ---------------------------------------------------------------------------
+  adminer:
+    image: adminer:latest
+    container_name: ollama_adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - ollama_network
+    depends_on:
+      - postgres
+    profiles:
+      - tools
+
+  # ---------------------------------------------------------------------------
+  # Redis Commander (Cache Management - Optional)
+  # ---------------------------------------------------------------------------
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ollama_redis_commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - ollama_network
+    depends_on:
+      - redis
+    profiles:
+      - tools
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  ollama_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_logs:
+    driver: local
+  backend_backups:
+    driver: local
+  frontend_dist:
+    driver: local
+  nginx_logs:
+    driver: local
+  nginx_cache:
+    driver: local

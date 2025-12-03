@@ -1,0 +1,101 @@
+# =============================================================================
+# Docker Compose - Development Environment
+# Ollama Manager - Development configuration with hot reload
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: ollama_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ollama
+      POSTGRES_PASSWORD: ollama_dev
+      POSTGRES_DB: ollama_manager_dev
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - ollama_network_dev
+
+  # ---------------------------------------------------------------------------
+  # Redis Cache
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: ollama_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - ollama_network_dev
+
+  # ---------------------------------------------------------------------------
+  # FastAPI Backend (Development with hot reload)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ../OllamaManager
+      dockerfile: Dockerfile
+      target: builder
+    container_name: ollama_backend_dev
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "true"
+      SECRET_KEY: dev-secret-key-not-for-production
+      OLLAMA_HOST: http://host.docker.internal:11434
+      DATABASE_URL: postgresql://ollama:ollama_dev@postgres:5432/ollama_manager_dev
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ../OllamaManager/src:/app/src:rw
+      - backend_logs_dev:/app/logs
+    ports:
+      - "8000:8000"
+    networks:
+      - ollama_network_dev
+    depends_on:
+      - postgres
+      - redis
+    command: ["uvicorn", "ollama_manager.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ---------------------------------------------------------------------------
+  # React Frontend (Development with hot reload)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: deps
+    container_name: ollama_frontend_dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ../frontend:/app:rw
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    networks:
+      - ollama_network_dev
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+
+networks:
+  ollama_network_dev:
+    driver: bridge
+
+volumes:
+  postgres_data_dev:
+    driver: local
+  backend_logs_dev:
+    driver: local
