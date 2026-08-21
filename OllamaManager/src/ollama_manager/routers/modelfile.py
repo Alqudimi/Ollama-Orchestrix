@@ -70,6 +70,11 @@ def parse_modelfile(content: str) -> dict:
         
         if not stripped or stripped.startswith("#"):
             continue
+            
+        # Handle inline comments (simple version, not inside triple quotes)
+        # Ollama Modelfile allows comments starting with #
+        if "#" in stripped and not any(q in stripped for q in ['"""', "'''"]):
+            stripped = stripped.split("#")[0].strip()
         
         instruction_found = False
         for instruction in MODELFILE_INSTRUCTIONS:

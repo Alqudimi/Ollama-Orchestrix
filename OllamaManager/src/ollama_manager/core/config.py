@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     OLLAMA_MAX_RETRIES: int = Field(default=3, ge=1, le=10, description="Maximum retry attempts")
     
     SECRET_KEY: str = Field(
-        default_factory=lambda: os.getenv("SESSION_SECRET", "dev-secret-key-change-in-production"),
+        default_factory=lambda: os.getenv("SECRET_KEY", "dev-secret-key-at-least-32-chars-long-for-security"),
         description="JWT secret key"
     )
     ALGORITHM: str = "HS256"
