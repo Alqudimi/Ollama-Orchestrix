@@ -118,6 +118,28 @@ class SystemService:
     async def get_uptime(self) -> float:
         delta = datetime.utcnow() - self.start_time
         return delta.total_seconds()
+        
+    async def get_health_status(self) -> dict:
+        """Enhanced health check including Ollama status."""
+        from .ollama_service import ollama_service
+        
+        ollama_health = await ollama_service.health_check()
+        system_resources = await self.get_system_resources()
+        
+        status = "healthy"
+        if not ollama_health.get("connected"):
+            status = "degraded"
+        
+        return {
+            "status": status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "ollama": ollama_health,
+            "system": {
+                "cpu_percent": system_resources.cpu_percent,
+                "memory_percent": system_resources.memory_percent,
+                "disk_percent": system_resources.disk_percent
+            }
+        }
     
     async def repair_system(self) -> dict:
         issues_found = 0

@@ -14,17 +14,11 @@ router = APIRouter(prefix="/system", tags=["System"])
 @router.get("/health")
 async def health_check():
     try:
-        ollama_health = await ollama_service.health_check()
-        uptime = await system_service.get_uptime()
-        
+        health_status = await system_service.get_health_status()
         return APIResponse(
             success=True,
-            message="System healthy",
-            data={
-                "status": "healthy",
-                "ollama_connected": ollama_health.get("connected", False),
-                "uptime_seconds": uptime
-            }
+            message=f"System health: {health_status['status']}",
+            data=health_status
         )
     except Exception as e:
         return APIResponse(
